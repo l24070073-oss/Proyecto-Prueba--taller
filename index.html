@@ -132,5 +132,211 @@
 
     <!-- Bootstrap JS and Popper.js -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <!-- Chatbot Assistant (Gemini Flash) -->
+    <style>
+        /* Chat widget styles */
+        .chat-widget {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 360px;
+            max-width: calc(100% - 40px);
+            box-shadow: 0 10px 30px rgba(2,6,23,0.4);
+            border-radius: 14px;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            backdrop-filter: blur(6px);
+            z-index: 1050;
+        }
+
+        .chat-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: linear-gradient(90deg,#6d5ef8,#8e54e9);
+            color: white;
+            padding: 12px 14px;
+            cursor: pointer;
+        }
+
+        .chat-body {
+            background: rgba(255,255,255,0.95);
+            max-height: 420px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .chat-messages {
+            padding: 12px;
+            overflow-y: auto;
+            flex: 1 1 auto;
+        }
+
+        .chat-input {
+            display: flex;
+            gap: 8px;
+            padding: 10px;
+            border-top: 1px solid rgba(0,0,0,0.06);
+            background: linear-gradient(180deg, rgba(250,250,250,0.9), rgba(245,245,245,0.9));
+        }
+
+        .chat-input input {
+            flex: 1 1 auto;
+            padding: 10px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(0,0,0,0.08);
+            outline: none;
+        }
+
+        .chat-btn {
+            background: #6d5ef8;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 10px;
+            cursor: pointer;
+        }
+
+        .msg {
+            display: inline-block;
+            margin-bottom: 10px;
+            padding: 10px 12px;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            line-height: 1.3;
+            max-width: 85%;
+            box-shadow: 0 2px 8px rgba(16,24,40,0.05);
+        }
+
+        .msg.user { background: linear-gradient(90deg,#e8f0ff,#dbe8ff); align-self: flex-end; }
+        .msg.bot { background: #ffffff; align-self: flex-start; }
+
+        .chat-minimized { width: 56px; height: 56px; border-radius: 50%; padding: 0; overflow: hidden; }
+        .chat-minimized .chat-toggle { justify-content: center; padding: 8px; }
+
+        .typing { font-style: italic; color: #666; }
+    </style>
+
+    <div id="chat" class="chat-widget" aria-hidden="false">
+        <div id="chatToggle" class="chat-toggle">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3C7 3 3 6.58 3 11c0 2.2 1 4.23 2.7 5.7L5 21l4.4-1.9C10.2 19.2 11.1 19.5 12 19.5c5 0 9-3.58 9-8.5S17 3 12 3z" fill="white"/></svg>
+                <strong>Asistente</strong>
+            </div>
+            <div style="font-size:0.9rem;opacity:0.95">Gemini Flash</div>
+        </div>
+        <div id="chatBody" class="chat-body" style="display:block;">
+            <div id="messages" class="chat-messages"></div>
+            <div class="chat-input">
+                <input id="chatInput" type="text" placeholder="Escribe una pregunta..." aria-label="Mensaje" />
+                <button id="sendBtn" class="chat-btn">Enviar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // CONFIGURATION: Reemplaza estos valores.
+        // IMPORTANTE: No expongas la API key en producción desde cliente; usa un proxy servidor.
+        const GEMINI_API_URL = 'https://YOUR_GEMINI_ENDPOINT_HERE'; // p.ej. proxy o endpoint de Gemini Flash
+        const GEMINI_API_KEY = 'YOUR_API_KEY_HERE';
+
+        const chat = document.getElementById('chat');
+        const chatToggle = document.getElementById('chatToggle');
+        const chatBody = document.getElementById('chatBody');
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('chatInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        let conversation = [];
+
+        function appendMessage(text, who) {
+            const div = document.createElement('div');
+            div.className = 'msg ' + (who === 'user' ? 'user' : 'bot');
+            div.textContent = text;
+            messagesEl.appendChild(div);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        chatToggle.addEventListener('click', () => {
+            // Minimiza / restaura
+            if (chatBody.style.display === 'none') {
+                chatBody.style.display = 'block';
+                chat.classList.remove('chat-minimized');
+                chat.setAttribute('aria-hidden','false');
+            } else {
+                chatBody.style.display = 'none';
+                chat.classList.add('chat-minimized');
+                chat.setAttribute('aria-hidden','true');
+            }
+        });
+
+        sendBtn.addEventListener('click', sendHandler);
+        inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendHandler(); });
+
+        async function sendHandler() {
+            const text = inputEl.value.trim();
+            if (!text) return;
+            inputEl.value = '';
+            appendMessage(text, 'user');
+            appendMessage('Escribiendo...', 'bot');
+
+            try {
+                const reply = await callGemini(text, conversation);
+                // Remove the last 'typing' message
+                const last = messagesEl.lastElementChild;
+                if (last && last.textContent === 'Escribiendo...') last.remove();
+                appendMessage(reply, 'bot');
+                conversation.push({user: text, bot: reply});
+            } catch (err) {
+                const last2 = messagesEl.lastElementChild;
+                if (last2 && last2.textContent === 'Escribiendo...') last2.remove();
+                appendMessage('Error: ' + (err.message || 'No se obtuvo respuesta.'), 'bot');
+                console.error(err);
+            }
+        }
+
+        async function callGemini(prompt, convo) {
+            // Realizar una petición con fetch. Ajusta el body según la API real de Gemini Flash.
+            const body = {
+                // Modelo y formato de ejemplo. Cambia según tu endpoint/proxy.
+                prompt: prompt,
+                conversation: convo,
+                maxTokens: 512
+            };
+
+            const res = await fetch(GEMINI_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + GEMINI_API_KEY
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!res.ok) {
+                const txt = await res.text().catch(() => '');
+                throw new Error('HTTP ' + res.status + ' - ' + txt);
+            }
+
+            // Intentar normalizar varias formas de respuesta
+            let data;
+            try { data = await res.json(); } catch (e) { data = null; }
+
+            if (!data) return await res.text();
+
+            // Posibles campos: candidates[0].content, choices[0].message.content, output, text
+            if (data.candidates && data.candidates[0] && data.candidates[0].content) return data.candidates[0].content;
+            if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) return data.choices[0].message.content;
+            if (data.output && typeof data.output === 'string') return data.output;
+            if (data.text) return data.text;
+
+            // Fallback: stringify
+            return JSON.stringify(data);
+        }
+
+        // Mensaje de bienvenida
+        appendMessage('Hola, soy tu asistente. Pregúntame cualquier cosa.', 'bot');
+    </script>
 </body>
 </html>
